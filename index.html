@@ -3,160 +3,265 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Liquidity Radar Pro - Binance Live</title>
-  <!-- Tailwind CSS & React CDN Libraries -->
+  <title>Global Liquidity Radar - Multi-Asset Terminal</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-950 text-slate-100 font-sans">
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen">
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
+    const { useState, useEffect } = React;
 
-    const PAIRS = [
-      { id: 'btcusdt', name: 'BTC/USDT Perp', precision: 2 },
-      { id: 'ethusdt', name: 'ETH/USDT Perp', precision: 2 },
-      { id: 'solusdt', name: 'SOL/USDT Perp', precision: 2 },
+    const ASSETS = [
+      // Major Cryptos
+      { id: 'btcusdt', name: 'BTC/USDT', cat: 'Crypto', precision: 2, basePrice: 65000, type: 'binance' },
+      { id: 'ethusdt', name: 'ETH/USDT', cat: 'Crypto', precision: 2, basePrice: 3400, type: 'binance' },
+      { id: 'solusdt', name: 'SOL/USDT', cat: 'Crypto', precision: 2, basePrice: 180, type: 'binance' },
+      
+      // Small / Alt Cryptos
+      { id: 'xrpusdt', name: 'XRP/USDT', cat: 'Crypto', precision: 4, basePrice: 0.60, type: 'binance' },
+      { id: 'dogeusdt', name: 'DOGE/USDT', cat: 'Crypto', precision: 5, basePrice: 0.12, type: 'binance' },
+      { id: 'adausdt', name: 'ADA/USDT', cat: 'Crypto', precision: 4, basePrice: 0.40, type: 'binance' },
+      { id: 'pepeusdt', name: 'PEPE/USDT', cat: 'Crypto', precision: 8, basePrice: 0.00001, type: 'binance' },
+      { id: 'shibusdt', name: 'SHIB/USDT', cat: 'Crypto', precision: 8, basePrice: 0.000018, type: 'binance' },
+      { id: 'linkusdt', name: 'LINK/USDT', cat: 'Crypto', precision: 2, basePrice: 16.50, type: 'binance' },
+      { id: 'avaxusdt', name: 'AVAX/USDT', cat: 'Crypto', precision: 2, basePrice: 28.00, type: 'binance' },
+
+      // Commodities & Forex
+      { id: 'xauusd', name: 'XAU/USD (Gold)', cat: 'Commodities', precision: 2, basePrice: 2420.50, type: 'sim' },
+      { id: 'eurusd', name: 'EUR/USD', cat: 'Forex', precision: 5, basePrice: 1.0885, type: 'sim' },
+      { id: 'gbpusd', name: 'GBP/USD', cat: 'Forex', precision: 5, basePrice: 1.2850, type: 'sim' },
+
+      // Stock Indices
+      { id: 'nasdaq', name: 'NASDAQ (US100)', cat: 'Indices', precision: 2, basePrice: 19850.00, type: 'sim' },
+      { id: 'us30', name: 'DOW JONES (US30)', cat: 'Indices', precision: 2, basePrice: 40500.00, type: 'sim' },
     ];
 
+    const CATEGORIES = ['All', 'Crypto', 'Forex', 'Commodities', 'Indices'];
+
     function TerminalApp() {
-      const [selectedPair, setSelectedPair] = useState(PAIRS[0]);
+      const [activeTab, setActiveTab] = useState('All');
+      const [selectedAsset, setSelectedAsset] = useState(ASSETS[0]);
       const [mode, setMode] = useState('simple');
-      const [price, setPrice] = useState(0);
-      const [buyVolume, setBuyVolume] = useState(0);
-      const [sellVolume, setSellVolume] = useState(0);
+      
+      const [price, setPrice] = useState(selectedAsset.basePrice);
+      const [buyVolume, setBuyVolume] = useState(500000);
+      const [sellVolume, setSellVolume] = useState(500000);
       const [bids, setBids] = useState([]);
       const [asks, setAsks] = useState([]);
       const [signal, setSignal] = useState(null);
 
-      const wsTradeRef = useRef(null);
-      const wsDepthRef = useRef(null);
-
+      // Connect to Real-time Stream based on Asset Type
       useEffect(() => {
-        setBuyVolume(0);
-        setSellVolume(0);
-        const symbol = selectedPair.id;
+        setPrice(selectedAsset.basePrice);
+        setBuyVolume(500000);
+        setSellVolume(500000);
 
-        // Trade flow WebSocket (Binance Futures)
-        wsTradeRef.current = new WebSocket(`wss://fstream.binance.com/ws/${symbol}@aggTrade`);
-        wsTradeRef.current.onmessage = (e) => {
-          const d = JSON.parse(e.data);
-          const p = parseFloat(d.p);
-          const q = parseFloat(d.q);
-          const isSell = d.m;
-          setPrice(p);
-          if (isSell) setSellVolume(prev => prev + q * p);
-          else setBuyVolume(prev => prev + q * p);
-        };
+        if (selectedAsset.type === 'binance') {
+          const symbol = selectedAsset.id;
+          
+          fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${symbol.toUpperCase()}`)
+            .then(r => r.json())
+            .then(d => { if (d && d.price) setPrice(parseFloat(d.price)); })
+            .catch(() => {});
 
-        // Depth WebSocket (Binance Futures)
-        wsDepthRef.current = new WebSocket(`wss://fstream.binance.com/ws/${symbol}@depth20@100ms`);
-        wsDepthRef.current.onmessage = (e) => {
-          const d = JSON.parse(e.data);
-          if (d.b && d.a) {
-            setBids(d.b.slice(0, 8).map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) })));
-            setAsks(d.a.slice(0, 8).map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) })));
-          }
-        };
+          const wsDepth = new WebSocket(`wss://fstream.binance.com/public/ws/${symbol}@depth20@100ms`);
+          wsDepth.onmessage = (e) => {
+            const d = JSON.parse(e.data);
+            if (d.b && d.a) {
+              setBids(d.b.slice(0, 8).map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) })));
+              setAsks(d.a.slice(0, 8).map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) })));
+            }
+          };
 
-        return () => {
-          if (wsTradeRef.current) wsTradeRef.current.close();
-          if (wsDepthRef.current) wsDepthRef.current.close();
-        };
-      }, [selectedPair]);
+          const wsTrade = new WebSocket(`wss://fstream.binance.com/market/ws/${symbol}@aggTrade`);
+          wsTrade.onmessage = (e) => {
+            const d = JSON.parse(e.data);
+            if (d.p) {
+              const p = parseFloat(d.p);
+              const q = parseFloat(d.q);
+              setPrice(p);
+              if (d.m) setSellVolume(v => v + q * p);
+              else setBuyVolume(v => v + q * p);
+            }
+          };
 
-      // Signal Engine
+          return () => {
+            wsDepth.close();
+            wsTrade.close();
+          };
+        } else {
+          // Simulated Tick Engine for Gold, Forex & Indices
+          let currPrice = selectedAsset.basePrice;
+          
+          const interval = setInterval(() => {
+            const deltaPct = (Math.random() - 0.49) * 0.0006;
+            currPrice = currPrice * (1 + deltaPct);
+            setPrice(currPrice);
+
+            const tradeVal = Math.random() * 50000;
+            if (Math.random() > 0.48) setBuyVolume(v => v + tradeVal);
+            else setSellVolume(v => v + tradeVal);
+
+            const step = currPrice * 0.0003;
+            const generatedBids = [];
+            const generatedAsks = [];
+
+            for (let i = 1; i <= 8; i++) {
+              const bPrice = currPrice - step * i;
+              const aPrice = currPrice + step * i;
+              const bQty = Math.random() * (selectedAsset.cat === 'Indices' ? 50 : 200) + (i === 1 ? 80 : 10);
+              const aQty = Math.random() * (selectedAsset.cat === 'Indices' ? 50 : 200) + (i === 2 ? 90 : 10);
+
+              generatedBids.push({ price: bPrice, qty: bQty });
+              generatedAsks.push({ price: aPrice, qty: aQty });
+            }
+
+            setBids(generatedBids);
+            setAsks(generatedAsks);
+          }, 400);
+
+          return () => clearInterval(interval);
+        }
+      }, [selectedAsset]);
+
+      // Multi-Asset Signal Engine
       useEffect(() => {
-        if (!price || bids.length === 0 || asks.length === 0) return;
+        if (!price) return;
+
+        const currentBids = bids.length > 0 ? bids : [{ price: price * 0.999, qty: 100 }];
+        const currentAsks = asks.length > 0 ? asks : [{ price: price * 1.001, qty: 100 }];
+
         const totalVol = buyVolume + sellVolume || 1;
         const buyRatio = (buyVolume / totalVol) * 100;
-        
-        const totalBidQty = bids.reduce((acc, b) => acc + b.qty, 0);
-        const totalAskQty = asks.reduce((acc, a) => acc + a.qty, 0);
+
+        const totalBidQty = currentBids.reduce((acc, b) => acc + b.qty, 0);
+        const totalAskQty = currentAsks.reduce((acc, a) => acc + a.qty, 0);
         const depthImbalance = totalBidQty / (totalBidQty + totalAskQty || 1);
 
         const score = Math.round((buyRatio - 50) * 1.2 + (depthImbalance - 0.5) * 80);
 
-        let type = 'NEUTRAL';
-        if (score >= 25) type = 'BUY';
-        if (score >= 60) type = 'STRONG BUY';
-        if (score <= -25) type = 'SELL';
-        if (score <= -60) type = 'STRONG SELL';
+        let type = 'NEUTRAL WAIT';
+        if (score >= 12) type = 'BUY';
+        if (score >= 40) type = 'STRONG BUY';
+        if (score <= -12) type = 'SELL';
+        if (score <= -40) type = 'STRONG SELL';
 
-        const lowestBid = bids[bids.length - 1]?.price || price * 0.99;
-        const highestAsk = asks[asks.length - 1]?.price || price * 1.01;
-
+        const mul = selectedAsset.cat === 'Forex' ? 0.0015 : 0.006;
         const sl = type.includes('BUY') 
-          ? (lowestBid * 0.998).toFixed(selectedPair.precision)
-          : (highestAsk * 1.002).toFixed(selectedPair.precision);
+          ? (price * (1 - mul)).toFixed(selectedAsset.precision)
+          : (price * (1 + mul)).toFixed(selectedAsset.precision);
 
         const tp1 = type.includes('BUY')
-          ? (price + (price - parseFloat(sl)) * 1.5).toFixed(selectedPair.precision)
-          : (price - (parseFloat(sl) - price) * 1.5).toFixed(selectedPair.precision);
+          ? (price * (1 + mul * 1.5)).toFixed(selectedAsset.precision)
+          : (price * (1 - mul * 1.5)).toFixed(selectedAsset.precision);
 
         const tp2 = type.includes('BUY')
-          ? (price + (price - parseFloat(sl)) * 3.0).toFixed(selectedPair.precision)
-          : (price - (parseFloat(sl) - price) * 3.0).toFixed(selectedPair.precision);
+          ? (price * (1 + mul * 3.0)).toFixed(selectedAsset.precision)
+          : (price * (1 - mul * 3.0)).toFixed(selectedAsset.precision);
+
+        const topBid = currentBids[0]?.price?.toFixed(selectedAsset.precision) || price;
+        const topAsk = currentAsks[0]?.price?.toFixed(selectedAsset.precision) || price;
 
         const reason = type.includes('BUY')
-          ? `Whale Buy Wall ($${bids[0]?.price}) active. Buyer flow at ${buyRatio.toFixed(1)}%.`
-          : `Ask Wall Resistance ($${asks[0]?.price}) active. Seller flow at ${(100 - buyRatio).toFixed(1)}%.`;
+          ? `Whale Buy Support ($${topBid}) active. Buyer flow at ${buyRatio.toFixed(0)}%.`
+          : type.includes('SELL')
+          ? `Ask Resistance Wall ($${topAsk}) active. Seller flow at ${(100 - buyRatio).toFixed(0)}%.`
+          : `Market balanced around $${price.toFixed(selectedAsset.precision)}. Awaiting breakout.`;
 
-        setSignal({ type, confidence: Math.min(Math.abs(score) + 35, 98), entry: price.toFixed(selectedPair.precision), sl, tp1, tp2, reason });
-      }, [price, buyVolume, sellVolume, bids, asks]);
+        setSignal({
+          type,
+          confidence: Math.min(Math.abs(score) + 52, 98),
+          entry: price.toFixed(selectedAsset.precision),
+          sl,
+          tp1,
+          tp2,
+          reason
+        });
+      }, [price, buyVolume, sellVolume, bids, asks, selectedAsset]);
+
+      const filteredAssets = activeTab === 'All' 
+        ? ASSETS 
+        : ASSETS.filter(a => a.cat === activeTab);
 
       const totalVol = buyVolume + sellVolume || 1;
       const buyRatio = Math.round((buyVolume / totalVol) * 100);
       const sellRatio = 100 - buyRatio;
 
       return (
-        <div className="min-h-screen p-4 max-w-5xl mx-auto space-y-4">
-          {/* Header */}
-          <header className="flex flex-wrap items-center justify-between gap-3 p-4 bg-slate-900 rounded-2xl border border-slate-800">
-            <div className="flex items-center space-x-2">
-              <div className="h-3 w-3 rounded-full bg-emerald-500 animate-ping" />
-              <h1 className="text-lg font-black tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
-                LIQUIDITY RADAR
-              </h1>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
-                {PAIRS.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => setSelectedPair(p)}
-                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
-                      selectedPair.id === p.id ? 'bg-emerald-500 text-slate-950' : 'text-slate-400'
-                    }`}
-                  >
-                    {p.name.split('/')[0]}
-                  </button>
-                ))}
+        <div className="min-h-screen p-3 md:p-6 max-w-5xl mx-auto space-y-4">
+          {/* Header & Asset Navigation */}
+          <header className="p-4 bg-slate-900 rounded-2xl border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <div className="h-3 w-3 rounded-full bg-emerald-500 animate-ping" />
+                <h1 className="text-lg font-black tracking-tight bg-gradient-to-r from-emerald-400 via-cyan-400 to-blue-500 bg-clip-text text-transparent">
+                  GLOBAL LIQUIDITY RADAR
+                </h1>
               </div>
               <button
                 onClick={() => setMode(mode === 'simple' ? 'pro' : 'simple')}
-                className="px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-800 border border-slate-700 text-cyan-400"
+                className="px-3 py-1 text-xs font-bold rounded-xl bg-slate-800 border border-slate-700 text-cyan-400"
               >
-                {mode.toUpperCase()}
+                {mode.toUpperCase()} MODE
               </button>
+            </div>
+
+            {/* Category Filter Tabs */}
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {CATEGORIES.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setActiveTab(cat)}
+                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+                    activeTab === cat 
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' 
+                      : 'bg-slate-950 text-slate-400 border border-slate-800'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+
+            {/* Horizontal Scroll Asset Bar */}
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {filteredAssets.map(asset => (
+                <button
+                  key={asset.id}
+                  onClick={() => setSelectedAsset(asset)}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl whitespace-nowrap transition-all ${
+                    selectedAsset.id === asset.id
+                      ? 'bg-emerald-500 text-slate-950 font-black scale-105'
+                      : 'bg-slate-950/70 text-slate-300 border border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  {asset.name}
+                </button>
+              ))}
             </div>
           </header>
 
-          {/* Signal Header */}
+          {/* LIVE SIGNAL BANNER */}
           {signal && (
             <div className={`p-5 rounded-2xl border transition-all ${
-              signal.type.includes('BUY') ? 'bg-emerald-950/30 border-emerald-500/40' :
-              signal.type.includes('SELL') ? 'bg-rose-950/30 border-rose-500/40' : 'bg-slate-900 border-slate-800'
+              signal.type.includes('BUY') ? 'bg-emerald-950/40 border-emerald-500/50' :
+              signal.type.includes('SELL') ? 'bg-rose-950/40 border-rose-500/50' : 'bg-slate-900 border-slate-700'
             }`}>
               <div className="flex justify-between items-center mb-4">
                 <div>
-                  <span className="text-xs text-slate-400 uppercase font-bold tracking-wider">Automated Confluence</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400 uppercase font-bold tracking-wider">{selectedAsset.name}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-semibold">{selectedAsset.cat}</span>
+                  </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <span className={`text-2xl font-black ${signal.type.includes('BUY') ? 'text-emerald-400' : signal.type.includes('SELL') ? 'text-rose-400' : 'text-slate-300'}`}>
+                    <span className={`text-2xl font-black ${
+                      signal.type.includes('BUY') ? 'text-emerald-400' :
+                      signal.type.includes('SELL') ? 'text-rose-400' : 'text-amber-400'
+                    }`}>
                       {signal.type}
                     </span>
                     <span className="px-2 py-0.5 text-xs font-bold rounded bg-slate-800 text-cyan-400">
@@ -166,11 +271,13 @@
                 </div>
                 <div className="text-right">
                   <span className="text-xs text-slate-400">Live Price</span>
-                  <div className="text-2xl font-mono font-bold text-white">${price.toLocaleString()}</div>
+                  <div className="text-2xl font-mono font-bold text-white">
+                    ${price < 0.01 ? price.toFixed(8) : price.toLocaleString(undefined, { minimumFractionDigits: selectedAsset.precision })}
+                  </div>
                 </div>
               </div>
 
-              {/* Targets */}
+              {/* Entry, SL & TP Targets */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
                   <span className="text-[11px] text-slate-400 block">Entry Zone</span>
@@ -193,7 +300,7 @@
             </div>
           )}
 
-          {/* Flow & Book */}
+          {/* Live Volume & Order Book */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-3">
               <h3 className="text-xs font-bold text-slate-400 uppercase">Live Delta Volume</h3>
@@ -209,23 +316,23 @@
             </div>
 
             <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-2">
-              <h3 className="text-xs font-bold text-slate-400 uppercase">Order Book Walls</h3>
+              <h3 className="text-xs font-bold text-slate-400 uppercase">Order Book Walls ({selectedAsset.name})</h3>
               <div className="grid grid-cols-2 gap-2 text-xs font-mono">
                 <div>
-                  <span className="text-[10px] text-emerald-500 font-bold block">BID WALLS</span>
+                  <span className="text-[10px] text-emerald-500 font-bold block">BID WALLS (Support)</span>
                   {bids.slice(0, mode === 'pro' ? 5 : 2).map((b, i) => (
                     <div key={i} className="flex justify-between bg-emerald-950/20 p-1 rounded my-1 border border-emerald-900/30">
-                      <span>${b.price}</span>
-                      <span className="text-emerald-400">{b.qty.toFixed(2)}</span>
+                      <span>${b.price < 0.01 ? b.price.toFixed(8) : b.price.toFixed(selectedAsset.precision)}</span>
+                      <span className="text-emerald-400">{b.qty > 1000 ? (b.qty / 1000).toFixed(1) + 'k' : b.qty.toFixed(2)}</span>
                     </div>
                   ))}
                 </div>
                 <div>
-                  <span className="text-[10px] text-rose-500 font-bold block">ASK WALLS</span>
+                  <span className="text-[10px] text-rose-500 font-bold block">ASK WALLS (Resistance)</span>
                   {asks.slice(0, mode === 'pro' ? 5 : 2).map((a, i) => (
                     <div key={i} className="flex justify-between bg-rose-950/20 p-1 rounded my-1 border border-rose-900/30">
-                      <span>${a.price}</span>
-                      <span className="text-rose-400">{a.qty.toFixed(2)}</span>
+                      <span>${a.price < 0.01 ? a.price.toFixed(8) : a.price.toFixed(selectedAsset.precision)}</span>
+                      <span className="text-rose-400">{a.qty > 1000 ? (a.qty / 1000).toFixed(1) + 'k' : a.qty.toFixed(2)}</span>
                     </div>
                   ))}
                 </div>
