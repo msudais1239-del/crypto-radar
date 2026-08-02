@@ -2,413 +2,724 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Liquidity Radar - PERP</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Global Liquidity Radar - Multi-Asset Terminal</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <style>
-    /* Custom Scrollbar and Font Smoothing */
-    body {
-      background-color: #0B0E14;
-      color: #E2E8F0;
-      -webkit-font-smoothing: antialiased;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
-    .font-mono {
-      font-family: "SF Mono", "Robto Mono", Menlo, Consolas, monospace;
-    }
-    ::-webkit-scrollbar { width: 4px; height: 4px; }
-    ::-webkit-scrollbar-track { background: #0B0E14; }
-    ::-webkit-scrollbar-thumb { background: #1F2937; border-radius: 4px; }
-    
-    /* Neumorphic/Dark UI Panels */
-    .panel {
-      background-color: #12161E;
-      border: 1px solid #1F2937;
-      border-radius: 12px;
-    }
-  </style>
 </head>
-<body>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen">
   <div id="root"></div>
 
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
     const ASSETS = [
-      { id: 'btcusdt', base: 'BTC', name: 'BTCUSDT', precision: 1, type: 'futures' },
-      { id: 'ethusdt', base: 'ETH', name: 'ETHUSDT', precision: 2, type: 'futures' },
-      { id: 'solusdt', base: 'SOL', name: 'SOLUSDT', precision: 3, type: 'futures' }
+      // Major Cryptos
+      { id: 'btcusdt', name: 'BTC/USDT', cat: 'Crypto', precision: 2, basePrice: 65000, type: 'binance' },
+      { id: 'ethusdt', name: 'ETH/USDT', cat: 'Crypto', precision: 2, basePrice: 3400, type: 'binance' },
+      { id: 'solusdt', name: 'SOL/USDT', cat: 'Crypto', precision: 2, basePrice: 180, type: 'binance' },
+
+      // Small / Alt Cryptos
+      { id: 'xrpusdt', name: 'XRP/USDT', cat: 'Crypto', precision: 4, basePrice: 0.60, type: 'binance' },
+      { id: 'dogeusdt', name: 'DOGE/USDT', cat: 'Crypto', precision: 5, basePrice: 0.12, type: 'binance' },
+      { id: 'adausdt', name: 'ADA/USDT', cat: 'Crypto', precision: 4, basePrice: 0.40, type: 'binance' },
+      { id: 'pepeusdt', name: 'PEPE/USDT', cat: 'Crypto', precision: 8, basePrice: 0.00001, type: 'binance' },
+      { id: 'shibusdt', name: 'SHIB/USDT', cat: 'Crypto', precision: 8, basePrice: 0.000018, type: 'binance' },
+      { id: 'linkusdt', name: 'LINK/USDT', cat: 'Crypto', precision: 2, basePrice: 16.50, type: 'binance' },
+      { id: 'avaxusdt', name: 'AVAX/USDT', cat: 'Crypto', precision: 2, basePrice: 28.00, type: 'binance' },
+
+      // Commodities & Forex (simulated / Twelve Data)
+      { id: 'xauusd', name: 'XAU/USD (Gold)', cat: 'Commodities', precision: 2, basePrice: 2420.50, type: 'sim' },
+      { id: 'eurusd', name: 'EUR/USD', cat: 'Forex', precision: 5, basePrice: 1.0885, type: 'sim' },
+      { id: 'gbpusd', name: 'GBP/USD', cat: 'Forex', precision: 5, basePrice: 1.2850, type: 'sim' },
+
+      // Stock Indices (simulated)
+      { id: 'nasdaq', name: 'NASDAQ (US100)', cat: 'Indices', precision: 2, basePrice: 19850.00, type: 'sim' },
+      { id: 'us30', name: 'DOW JONES (US30)', cat: 'Indices', precision: 2, basePrice: 40500.00, type: 'sim' },
     ];
 
+    const CATEGORIES = ['All', 'Crypto', 'Forex', 'Commodities', 'Indices'];
+    const TRADE_WINDOW = 300; 
+    const PRICE_HISTORY_MS = 10 * 60 * 1000; 
+
+    const TWELVE_DATA_SYMBOLS = {
+      xauusd: 'XAU/USD',
+      eurusd: 'EUR/USD',
+      gbpusd: 'GBP/USD',
+      nasdaq: 'IXIC', 
+      us30: 'DJI',    
+    };
+    const TWELVE_DATA_POLL_MS = 60000;
+
     function fmtPrice(p, precision) {
-      if (!p || isNaN(p)) return '—';
-      return p.toLocaleString('en-US', { minimumFractionDigits: precision, maximumFractionDigits: precision });
+      if (p === undefined || p === null || isNaN(p)) return '—';
+      return p < 0.01 
+        ? p.toFixed(precision || 8) 
+        : p.toLocaleString(undefined, { minimumFractionDigits: precision, maximumFractionDigits: precision });
     }
 
-    function fmtVol(v, precision = 2) {
-      if (isNaN(v)) return '0.00';
-      return v.toLocaleString('en-US', { minimumFractionDigits: precision, maximumFractionDigits: precision });
-    }
-
-    function fmtNotionalShort(n) {
-      if (!n || isNaN(n)) return '0';
-      if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
-      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-      return n.toFixed(0);
+    function fmtNotional(n) {
+      if (n === undefined || n === null || isNaN(n)) return '—';
+      if (n >= 1e9) return '$' + (n / 1e9).toFixed(1) + 'B';
+      if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+      return '$' + n.toFixed(0);
     }
 
     function TerminalApp() {
-      const [asset, setAsset] = useState(ASSETS[0]);
-      const [connStatus, setConnStatus] = useState('connecting');
-      
-      // Market Data State
-      const [price, setPrice] = useState(0);
-      const [stats24h, setStats24h] = useState({ high: 0, low: 0, volUsd: 0 });
-      const [buyVol, setBuyVol] = useState(0); // Cumulative CVD Base Asset
-      const [sellVol, setSellVol] = useState(0); // Cumulative CVD Base Asset
-      
-      // Order Book State
+      const [activeTab, setActiveTab] = useState('All');
+      const [selectedAsset, setSelectedAsset] = useState(ASSETS[0]);
+      const [mode, setMode] = useState('simple');
+
+      const [price, setPrice] = useState(selectedAsset.basePrice);
+      const [trades, setTrades] = useState([]); 
       const [bids, setBids] = useState([]);
       const [asks, setAsks] = useState([]);
-      
-      // Heuristic States
-      const [spoofScore, setSpoofScore] = useState(12);
+      const [signal, setSignal] = useState(null);
       const [spoofAlerts, setSpoofAlerts] = useState([]);
-      const [spoofHistory, setSpoofHistory] = useState(Array(30).fill(10));
-      const [confidence, setConfidence] = useState(50);
-      const [fundingRate, setFundingRate] = useState(0.0050);
+      const [spoofScore, setSpoofScore] = useState(6);
+      const [spoofHistory, setSpoofHistory] = useState([]);
+      const [connStatus, setConnStatus] = useState('connecting');
+      const [apiKey, setApiKey] = useState('');
+      const [apiKeyDraft, setApiKeyDraft] = useState('');
 
-      // Refs for throttling and calculation
-      const volRef = useRef({ buy: 0, sell: 0 });
-      const obRef = useRef({ bids: [], asks: [], lastUpdate: Date.now() });
+      const prevBookRef = useRef({ bids: [], asks: [], t: Date.now() });
+      const wallAvgRef = useRef({ bidAvg: 0, askAvg: 0 });
+      const priceHistoryRef = useRef([]); 
 
+      // Connect to Real-time Stream
       useEffect(() => {
         let cancelled = false;
-        let ws = null;
-        let syncInterval = null;
-        const symbol = asset.id.toLowerCase();
         
-        // Reset states on asset change
-        setPrice(0);
-        setBuyVol(0);
-        setSellVol(0);
-        volRef.current = { buy: 0, sell: 0 };
-        setSpoofHistory(Array(30).fill(10));
+        let liveTrades = [];
+        let latestBids = [];
+        let latestAsks = [];
+        let lastPrice = selectedAsset.basePrice;
+
+        setPrice(selectedAsset.basePrice);
+        setTrades([]);
+        setBids([]);
+        setAsks([]);
         setSpoofAlerts([]);
+        setSpoofScore(6);
+        setSpoofHistory([]);
+        setConnStatus('connecting');
+        priceHistoryRef.current = [];
+        prevBookRef.current = { bids: [], asks: [], t: Date.now() };
 
-        // Fetch Initial 24h Stats & Funding
-        fetch(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${symbol.toUpperCase()}`)
-          .then(r => r.json())
-          .then(d => {
-            if (!cancelled && d) {
-              setStats24h({ high: parseFloat(d.highPrice), low: parseFloat(d.lowPrice), volUsd: parseFloat(d.quoteVolume) });
-            }
-          });
+        if (selectedAsset.type === 'binance') {
+          const symbol = selectedAsset.id.toLowerCase();
+          let ws = null;
+          let retryCount = 0;
+          let retryTimer = null;
+          let syncInterval = null;
+          let useFutures = true;
 
-        fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol.toUpperCase()}`)
-          .then(r => r.json())
-          .then(d => {
-            if (!cancelled && d) setFundingRate(parseFloat(d.lastFundingRate) * 100);
-          });
+          // Fetch initial price snapshot
+          fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${symbol.toUpperCase()}`)
+            .then(r => r.json())
+            .then(d => { if (!cancelled && d && d.price) lastPrice = parseFloat(d.price); })
+            .catch(() => {
+              fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol.toUpperCase()}`)
+                .then(r => r.json())
+                .then(d => { if (!cancelled && d && d.price) lastPrice = parseFloat(d.price); })
+                .catch(() => {});
+            });
 
-        function connect() {
-          if (cancelled) return;
-          setConnStatus('connecting');
-          // STRICTLY FUTURES ENDPOINT
-          const url = `wss://fstream.binance.com/stream?streams=${symbol}@aggTrade/${symbol}@depth20@100ms`;
-          ws = new WebSocket(url);
+          function connectCombinedWS() {
+            if (cancelled) return;
 
-          let latestBids = [];
-          let latestAsks = [];
-          let lastP = 0;
+            const domain = useFutures ? 'fstream.binance.com' : 'stream.binance.com:9443';
+            const url = `wss://${domain}/stream?streams=${symbol}@aggTrade/${symbol}@depth20@100ms`;
+            
+            ws = new WebSocket(url);
 
-          ws.onopen = () => { if (!cancelled) setConnStatus('live'); };
-          
-          ws.onmessage = (e) => {
-            try {
-              const msg = JSON.parse(e.data);
-              const d = msg.data;
+            ws.onopen = () => {
+              retryCount = 0;
+              if (!cancelled) setConnStatus('live');
+            };
 
-              // AggTrade Update (CVD calculation)
-              if (d.e === 'aggTrade') {
-                const p = parseFloat(d.p);
-                const q = parseFloat(d.q); // Quantity in base asset (e.g., BTC)
-                lastP = p;
-                
-                if (d.m) {
-                  volRef.current.sell += q; // Market Sell
-                } else {
-                  volRef.current.buy += q; // Market Buy
+            ws.onmessage = (e) => {
+              try {
+                const msg = JSON.parse(e.data);
+                const d = msg.data || msg;
+
+                // Handle Depth Update (Filter out 0.00 qty orders)
+                if (d.b && d.a) {
+                  latestBids = d.b
+                    .filter(([_, q]) => parseFloat(q) > 0)
+                    .slice(0, 8)
+                    .map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) }));
+
+                  latestAsks = d.a
+                    .filter(([_, q]) => parseFloat(q) > 0)
+                    .slice(0, 8)
+                    .map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) }));
                 }
-              }
 
-              // Depth Update (Orderbook)
-              if (d.e === 'depthUpdate') {
-                latestBids = d.b.filter(x => parseFloat(x[1]) > 0).slice(0, 15).map(x => ({ p: parseFloat(x[0]), q: parseFloat(x[1]) }));
-                latestAsks = d.a.filter(x => parseFloat(x[1]) > 0).slice(0, 15).map(x => ({ p: parseFloat(x[0]), q: parseFloat(x[1]) }));
-                
-                // Real-time Spoofing Heuristic Check
-                const prev = obRef.current;
-                const now = Date.now();
-                
-                if (prev.bids[0] && latestBids[0]) {
-                  const droppedBidVol = prev.bids[0].q - latestBids[0].q;
-                  if (droppedBidVol > 5 && latestBids[0].p < prev.bids[0].p) { // Large size pulled
-                    triggerSpoofAlert('bid', prev.bids[0].q, prev.bids[0].p, (now - prev.lastUpdate)/1000);
+                // Handle Aggregated Trade
+                if (d.p && d.q !== undefined) {
+                  const p = parseFloat(d.p);
+                  const q = parseFloat(d.q);
+                  if (!isNaN(p) && !isNaN(q)) {
+                    lastPrice = p;
+                    const now = Date.now();
+
+                    priceHistoryRef.current.push({ t: now, p: lastPrice });
+                    priceHistoryRef.current = priceHistoryRef.current.filter(pt => now - pt.t <= PRICE_HISTORY_MS);
+
+                    liveTrades.push({ side: d.m ? 'sell' : 'buy', notional: q * lastPrice });
+                    if (liveTrades.length > TRADE_WINDOW) {
+                      liveTrades = liveTrades.slice(-TRADE_WINDOW);
+                    }
                   }
                 }
-                if (prev.asks[0] && latestAsks[0]) {
-                  const droppedAskVol = prev.asks[0].q - latestAsks[0].q;
-                  if (droppedAskVol > 5 && latestAsks[0].p > prev.asks[0].p) {
-                    triggerSpoofAlert('ask', prev.asks[0].q, prev.asks[0].p, (now - prev.lastUpdate)/1000);
-                  }
-                }
-                
-                obRef.current = { bids: latestBids, asks: latestAsks, lastUpdate: now };
+              } catch (err) {
+                console.error('Stream parse error:', err);
               }
-            } catch (err) {}
-          };
+            };
 
-          ws.onerror = () => { if (!cancelled) setConnStatus('error'); };
-          ws.onclose = () => { if (!cancelled) setTimeout(connect, 3000); };
+            ws.onerror = () => {
+              if (useFutures) useFutures = false; // Fallback to Spot stream if Futures socket fails
+              if (!cancelled) setConnStatus('reconnecting');
+            };
 
-          // Throttled UI Updates (250ms) to prevent freezing
+            ws.onclose = () => {
+              if (cancelled) return;
+              setConnStatus('reconnecting');
+              const delay = Math.min(1000 * 2 ** retryCount, 10000);
+              retryCount += 1;
+              retryTimer = setTimeout(connectCombinedWS, delay);
+            };
+          }
+
+          connectCombinedWS();
+
+          // Smooth React state sync interval every 250ms
           syncInterval = setInterval(() => {
             if (cancelled) return;
-            if (lastP > 0) setPrice(lastP);
-            setBuyVol(volRef.current.buy);
-            setSellVol(volRef.current.sell);
-            setBids([...latestBids]);
-            setAsks([...latestAsks]);
-            
-            // Auto-decay spoof score
-            setSpoofScore(prev => Math.max(10, prev - 2));
-            setConfidence(Math.round(40 + Math.random() * 40));
+            setPrice(lastPrice);
+            setTrades([...liveTrades]);
+            if (latestBids.length > 0) setBids([...latestBids]);
+            if (latestAsks.length > 0) setAsks([...latestAsks]);
           }, 250);
+
+          return () => {
+            cancelled = true;
+            clearTimeout(retryTimer);
+            clearInterval(syncInterval);
+            if (ws) ws.close();
+          };
+        } else {
+          // SIM mode / Twelve Data
+          let anchorPrice = selectedAsset.basePrice;
+          let pollInterval;
+          const tdSymbol = TWELVE_DATA_SYMBOLS[selectedAsset.id];
+
+          async function pollRealPrice() {
+            if (!apiKey || !tdSymbol) return;
+            try {
+              const res = await fetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(tdSymbol)}&apikey=${encodeURIComponent(apiKey)}`);
+              const d = await res.json();
+              if (cancelled) return;
+              if (d && d.price && !isNaN(parseFloat(d.price))) {
+                anchorPrice = parseFloat(d.price);
+                setPrice(anchorPrice);
+                setConnStatus('live');
+              } else if (d && d.code) {
+                setConnStatus(d.code === 429 ? 'rate_limited' : 'key_error');
+              }
+            } catch {
+              if (!cancelled) setConnStatus('key_error');
+            }
+          }
+
+          if (apiKey && tdSymbol) {
+            setConnStatus('connecting');
+            pollRealPrice();
+            pollInterval = setInterval(pollRealPrice, TWELVE_DATA_POLL_MS);
+          } else {
+            setConnStatus('simulated');
+          }
+
+          const visualInterval = setInterval(() => {
+            const jitter = apiKey ? anchorPrice * (Math.random() - 0.5) * 0.00005 : anchorPrice * (Math.random() - 0.49) * 0.0006;
+            if (!apiKey) anchorPrice = anchorPrice * (1 + (Math.random() - 0.49) * 0.0006);
+            const displayPrice = apiKey ? anchorPrice + jitter : anchorPrice;
+            
+            setPrice(displayPrice);
+
+            const now = Date.now();
+            priceHistoryRef.current.push({ t: now, p: displayPrice });
+            priceHistoryRef.current = priceHistoryRef.current.filter(pt => now - pt.t <= PRICE_HISTORY_MS);
+
+            const tradeVal = Math.random() * 50000;
+            const side = Math.random() > 0.48 ? 'buy' : 'sell';
+            
+            liveTrades.push({ side, notional: tradeVal });
+            if (liveTrades.length > TRADE_WINDOW) {
+              liveTrades = liveTrades.slice(-TRADE_WINDOW);
+            }
+            setTrades([...liveTrades]);
+
+            const step = displayPrice * 0.0003;
+            const generatedBids = [];
+            const generatedAsks = [];
+
+            for (let i = 1; i <= 8; i++) {
+              const bPrice = displayPrice - step * i;
+              const aPrice = displayPrice + step * i;
+              const bQty = Math.random() * (selectedAsset.cat === 'Indices' ? 50 : 200) + (i === 1 ? 80 : 10);
+              const aQty = Math.random() * (selectedAsset.cat === 'Indices' ? 50 : 200) + (i === 2 ? 90 : 10);
+
+              generatedBids.push({ price: bPrice, qty: bQty });
+              generatedAsks.push({ price: aPrice, qty: aQty });
+            }
+
+            setBids(generatedBids);
+            setAsks(generatedAsks);
+          }, 300);
+
+          return () => {
+            cancelled = true;
+            clearInterval(visualInterval);
+            if (typeof pollInterval !== 'undefined') clearInterval(pollInterval);
+          };
+        }
+      }, [selectedAsset, apiKey]);
+
+      // Spoofing heuristic
+      useEffect(() => {
+        if (bids.length === 0 && asks.length === 0) return;
+        const prev = prevBookRef.current;
+        const now = Date.now();
+        const elapsedSec = Math.max(0.1, (now - (prev.t || now)) / 1000);
+
+        const bidTop = bids[0];
+        const askTop = asks[0];
+
+        const bidAvg = wallAvgRef.current.bidAvg || (bidTop ? bidTop.qty : 0);
+        const askAvg = wallAvgRef.current.askAvg || (askTop ? askTop.qty : 0);
+
+        const newAlerts = [];
+
+        if (prev.bids[0] && prev.bids[0].qty > bidAvg * 2.5 && bidTop && bidTop.qty < prev.bids[0].qty * 0.4) {
+          newAlerts.push({ side: 'bid', price: prev.bids[0].price, size: prev.bids[0].qty, notional: prev.bids[0].qty * prev.bids[0].price, elapsedSec, t: now });
+        }
+        if (prev.asks[0] && prev.asks[0].qty > askAvg * 2.5 && askTop && askTop.qty < prev.asks[0].qty * 0.4) {
+          newAlerts.push({ side: 'ask', price: prev.asks[0].price, size: prev.asks[0].qty, notional: prev.asks[0].qty * prev.asks[0].price, elapsedSec, t: now });
         }
 
-        connect();
+        if (newAlerts.length > 0) {
+          setSpoofAlerts(prevAlerts => [...newAlerts, ...prevAlerts].slice(0, 4));
+        }
 
-        // Spoof History Chart tick (Every 2 seconds)
-        const histInterval = setInterval(() => {
-          setSpoofHistory(prev => {
-            setSpoofScore(currentScore => {
-              const newHist = [...prev.slice(1), currentScore];
-              return currentScore;
-            });
-            return prev;
-          });
-        }, 2000);
+        const bidAnomaly = bidTop && bidAvg ? Math.max(0, bidTop.qty / bidAvg - 1) : 0;
+        const askAnomaly = askTop && askAvg ? Math.max(0, askTop.qty / askAvg - 1) : 0;
+        let nextScore = Math.round(Math.min(38, Math.max(4, Math.max(bidAnomaly, askAnomaly) * 26 + 4)));
+        if (newAlerts.length > 0) nextScore = Math.round(84 + Math.random() * 15);
+        setSpoofScore(nextScore);
+        setSpoofHistory(prevH => [...prevH.slice(-27), nextScore]);
 
-        return () => {
-          cancelled = true;
-          if (ws) ws.close();
-          clearInterval(syncInterval);
-          clearInterval(histInterval);
+        wallAvgRef.current = {
+          bidAvg: bidAvg * 0.85 + (bidTop ? bidTop.qty : 0) * 0.15,
+          askAvg: askAvg * 0.85 + (askTop ? askTop.qty : 0) * 0.15,
         };
-      }, [asset]);
+        prevBookRef.current = { bids, asks, t: now };
+      }, [bids, asks]);
 
-      function triggerSpoofAlert(side, size, p, timeObj) {
-        const scoreVal = Math.min(99, Math.round(75 + Math.random() * 24));
-        setSpoofScore(scoreVal);
-        setSpoofAlerts([{
-          msg: `${size.toFixed(1)} ${asset.base} ${side} wall at $${fmtPrice(p, asset.precision)} — cancelled after ${Math.max(0.2, timeObj).toFixed(1)}s, 0% filled`
-        }]);
-      }
+      // Multi-Asset Signal Engine
+      useEffect(() => {
+        if (!price) return;
 
-      // Calculations for UI rendering
-      const delta = buyVol - sellVol;
-      const totalVol = buyVol + sellVol || 1;
-      const buyPct = (buyVol / totalVol) * 100;
-      const sellPct = (sellVol / totalVol) * 100;
-      
-      const combinedBook = [
-        ...bids.map(b => ({ type: 'buy', ...b })),
-        ...asks.map(a => ({ type: 'sell', ...a }))
-      ].sort((a, b) => (b.p * b.q) - (a.p * a.q)).slice(0, 5); // Top 5 by Notional size
+        const currentBids = bids.length > 0 ? bids : [{ price: price * 0.999, qty: 100 }];
+        const currentAsks = asks.length > 0 ? asks : [{ price: price * 1.001, qty: 100 }];
+
+        const buyVolume = trades.filter(t => t.side === 'buy').reduce((a, t) => a + t.notional, 0);
+        const sellVolume = trades.filter(t => t.side === 'sell').reduce((a, t) => a + t.notional, 0);
+        const totalVol = buyVolume + sellVolume || 1;
+        const buyRatio = (buyVolume / totalVol) * 100;
+
+        const totalBidQty = currentBids.reduce((acc, b) => acc + b.qty, 0);
+        const totalAskQty = currentAsks.reduce((acc, a) => acc + a.qty, 0);
+        const depthImbalance = totalBidQty / (totalBidQty + totalAskQty || 1);
+
+        const score = Math.round((buyRatio - 50) * 1.2 + (depthImbalance - 0.5) * 80);
+
+        let type = 'NEUTRAL WAIT';
+        if (score >= 12) type = 'BUY';
+        if (score >= 40) type = 'STRONG BUY';
+        if (score <= -12) type = 'SELL';
+        if (score <= -40) type = 'STRONG SELL';
+
+        const mul = selectedAsset.cat === 'Forex' ? 0.0015 : 0.006;
+        const sl = type.includes('BUY')
+          ? (price * (1 - mul)).toFixed(selectedAsset.precision)
+          : (price * (1 + mul)).toFixed(selectedAsset.precision);
+
+        const tp1 = type.includes('BUY')
+          ? (price * (1 + mul * 1.5)).toFixed(selectedAsset.precision)
+          : (price * (1 - mul * 1.5)).toFixed(selectedAsset.precision);
+
+        const tp2 = type.includes('BUY')
+          ? (price * (1 + mul * 3.0)).toFixed(selectedAsset.precision)
+          : (price * (1 - mul * 3.0)).toFixed(selectedAsset.precision);
+
+        const topBid = currentBids[0]?.price?.toFixed(selectedAsset.precision) || price;
+        const topAsk = currentAsks[0]?.price?.toFixed(selectedAsset.precision) || price;
+
+        const reason = type.includes('BUY')
+          ? `Buy-side support near $${topBid}. Recent flow ${buyRatio.toFixed(0)}% buyers.`
+          : type.includes('SELL')
+          ? `Sell-side resistance near $${topAsk}. Recent flow ${(100 - buyRatio).toFixed(0)}% sellers.`
+          : `Market balanced around $${fmtPrice(price, selectedAsset.precision)}. Awaiting breakout.`;
+
+        // Generate Liquidity Zones without fake hardcoded $10M floor
+        const zoneCandidates = [
+          ...currentBids.map(b => ({ side: 'bid', price: b.price, qty: b.qty, notional: b.qty * b.price })),
+          ...currentAsks.map(a => ({ side: 'ask', price: a.price, qty: a.qty, notional: a.qty * a.price })),
+        ].sort((a, b) => b.notional - a.notional).slice(0, 6);
+        
+        const maxNotional = zoneCandidates[0]?.notional || 1;
+        
+        const zones = zoneCandidates.map(z => ({
+          ...z,
+          zoneScore: Math.min(99, Math.round(58 + (z.notional / maxNotional) * 41)),
+        }));
+
+        const hist = priceHistoryRef.current;
+        let projection = null;
+        if (hist.length >= 2) {
+          const first = hist[0];
+          const last = hist[hist.length - 1];
+          const elapsedMs = last.t - first.t;
+          if (elapsedMs > 5000) {
+            const ratePerMs = (last.p - first.p) / elapsedMs;
+            const twoHoursMs = 2 * 60 * 60 * 1000;
+            const dampening = 0.15;
+            const projected = last.p + ratePerMs * twoHoursMs * dampening;
+            const pctMove = ((projected - last.p) / last.p) * 100;
+            projection = {
+              price: projected,
+              pct: pctMove,
+              direction: pctMove > 0.05 ? 'up' : pctMove < -0.05 ? 'down' : 'sideways',
+              sampleMinutes: Math.round(elapsedMs / 60000),
+            };
+          }
+        }
+
+        setSignal({
+          type,
+          confidence: Math.min(Math.abs(score) + 52, 98),
+          entry: fmtPrice(price, selectedAsset.precision),
+          sl,
+          tp1,
+          tp2,
+          reason,
+          buyRatio,
+          zones,
+          projection,
+        });
+      }, [price, trades, bids, asks, selectedAsset]);
+
+      const filteredAssets = activeTab === 'All'
+        ? ASSETS
+        : ASSETS.filter(a => a.cat === activeTab);
+
+      // Dynamic volume ratio for immediate UI view
+      const buyVolume = trades.filter(t => t.side === 'buy').reduce((a, t) => a + t.notional, 0);
+      const sellVolume = trades.filter(t => t.side === 'sell').reduce((a, t) => a + t.notional, 0);
+      const totalVol = buyVolume + sellVolume || 1;
+      const buyRatio = trades.length ? Math.round((buyVolume / totalVol) * 100) : 50;
+      const sellRatio = 100 - buyRatio;
 
       return (
-        <div className="max-w-md mx-auto min-h-screen p-4 pb-20 space-y-4">
-          
-          {/* TOP NAV BAR */}
-          <div className="flex justify-between items-center pb-2 border-b border-gray-800">
-            <div>
-              <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                Liquidity <span className="text-amber-400 font-black italic">Radar.</span>
-              </h1>
-              <div className="text-[10px] text-gray-500 font-bold tracking-widest mt-1 flex gap-2">
-                {ASSETS.map(a => (
-                  <button 
-                    key={a.id} 
-                    onClick={() => setAsset(a)}
-                    className={asset.id === a.id ? 'text-white' : 'hover:text-gray-300'}
+        <div className="min-h-screen p-3 md:p-6 max-w-5xl mx-auto space-y-4">
+          {/* Header & Asset Navigation */}
+          <header className="p-4 bg-slate-900 rounded-2xl border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <div className={`h-3 w-3 rounded-full ${
+                  connStatus === 'live' ? 'bg-emerald-500 animate-ping' :
+                  (connStatus === 'error' || connStatus === 'key_error' || connStatus === 'rate_limited') ? 'bg-rose-500' :
+                  connStatus === 'reconnecting' ? 'bg-orange-500 animate-pulse' :
+                  'bg-amber-500 animate-pulse'
+                }`} />
+                <h1 className="text-lg font-black tracking-tight bg-gradient-to-r from-emerald-400 via-cyan-400 to-blue-500 bg-clip-text text-transparent">
+                  GLOBAL LIQUIDITY RADAR
+                </h1>
+              </div>
+              <button
+                onClick={() => setMode(mode === 'simple' ? 'pro' : 'simple')}
+                className="px-3 py-1 text-xs font-bold rounded-xl bg-slate-800 border border-slate-700 text-cyan-400"
+              >
+                {mode.toUpperCase()} MODE
+              </button>
+            </div>
+
+            {selectedAsset.type === 'sim' && (
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="password"
+                  value={apiKeyDraft}
+                  onChange={e => setApiKeyDraft(e.target.value)}
+                  placeholder="Twelve Data API key (free, for real Forex/Gold/Indices price)"
+                  className="flex-1 min-w-0 px-2.5 py-1.5 text-xs rounded-lg bg-slate-950 border border-slate-800 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-600"
+                />
+                <button
+                  onClick={() => setApiKey(apiKeyDraft.trim())}
+                  className="px-3 py-1.5 text-xs font-bold rounded-lg bg-cyan-700 text-white whitespace-nowrap"
+                >
+                  {apiKey ? 'Update' : 'Connect'}
+                </button>
+                {apiKey && (
+                  <button
+                    onClick={() => { setApiKey(''); setApiKeyDraft(''); }}
+                    className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-slate-800 border border-slate-700 text-slate-400"
                   >
-                    {a.name} PERP
+                    Clear
                   </button>
-                ))}
-                <span>• BINANCE FUTURES</span>
+                )}
               </div>
+            )}
+
+            {/* Category Filter Tabs */}
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {CATEGORIES.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setActiveTab(cat)}
+                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+                    activeTab === cat
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30'
+                      : 'bg-slate-950 text-slate-400 border border-slate-800'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
             </div>
-            <div className={`px-2 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 ${connStatus === 'live' ? 'text-emerald-400 bg-emerald-400/10' : 'text-amber-400 bg-amber-400/10'}`}>
-              <div className={`w-2 h-2 rounded-full ${connStatus === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></div>
-              {connStatus === 'live' ? 'LIVE' : 'CONNECTING'}
+
+            {/* Horizontal Scroll Asset Bar */}
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {filteredAssets.map(asset => (
+                <button
+                  key={asset.id}
+                  onClick={() => setSelectedAsset(asset)}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                    selectedAsset.id === asset.id
+                      ? 'bg-emerald-500 text-slate-950 font-black scale-105'
+                      : 'bg-slate-950/70 text-slate-300 border border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  {asset.name}
+                  {asset.type === 'sim' && (
+                    <span className={`text-[8px] px-1 rounded ${selectedAsset.id === asset.id ? 'bg-slate-950/30 text-slate-900' : 'bg-amber-900/40 text-amber-400'}`}>SIM</span>
+                  )}
+                </button>
+              ))}
             </div>
+          </header>
+
+          <div className={`px-4 py-2 rounded-xl text-[11px] font-semibold border ${
+            connStatus === 'live' ? 'bg-emerald-950/30 border-emerald-900/40 text-emerald-400' :
+            (connStatus === 'key_error' || connStatus === 'rate_limited') ? 'bg-rose-950/30 border-rose-900/40 text-rose-400' :
+            'bg-amber-950/30 border-amber-900/40 text-amber-400'
+          }`}>
+            {selectedAsset.type === 'binance' && `● LIVE — streaming real order book & trades from Binance for ${selectedAsset.name}.`}
+            {selectedAsset.type === 'sim' && connStatus === 'live' && `● LIVE PRICE — ${selectedAsset.name} price polled from Twelve Data every ~60s.`}
+            {selectedAsset.type === 'sim' && connStatus === 'connecting' && `● Connecting to Twelve Data for ${selectedAsset.name}...`}
+            {selectedAsset.type === 'sim' && connStatus === 'rate_limited' && `● RATE LIMITED — Twelve Data's free tier quota was hit.`}
+            {selectedAsset.type === 'sim' && connStatus === 'key_error' && `● KEY ERROR — couldn't fetch a real price with that API key/symbol.`}
+            {selectedAsset.type === 'sim' && connStatus === 'simulated' && `● SIMULATED — no API key entered, so ${selectedAsset.name} price/order book is a randomized walk.`}
           </div>
 
-          {/* TOP STATS */}
-          <div className="flex justify-between text-center panel px-4 py-3">
-            <div>
-              <div className="text-[10px] text-gray-500 font-bold mb-1">OI</div>
-              <div className="text-sm text-gray-200 font-mono">Loading..</div>
-            </div>
-            <div>
-              <div className="text-[10px] text-gray-500 font-bold mb-1">FR</div>
-              <div className={`text-sm font-mono ${fundingRate >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                {fundingRate >= 0 ? '+' : ''}{fundingRate.toFixed(4)}%
-              </div>
-            </div>
-            <div>
-              <div className="text-[10px] text-gray-500 font-bold mb-1">SPREAD</div>
-              <div className="text-sm text-gray-200 font-mono">
-                ${bids[0] && asks[0] ? (asks[0].p - bids[0].p).toFixed(asset.precision) : '0.0'}
-              </div>
-            </div>
-          </div>
-
-          {/* MAIN PRICE BANNER */}
-          <div className="panel p-4 flex justify-between items-center">
-            <div>
-              <div className="text-4xl font-bold font-mono tracking-tighter text-white">
-                ${fmtPrice(price, asset.precision)}
-              </div>
-              <div className="text-xs text-red-500 font-mono mt-1 font-bold">-0.00%</div>
-              <div className="flex gap-4 mt-2 text-[10px] text-gray-500 font-mono">
-                <span>24h H: <span className="text-gray-300">${fmtPrice(stats24h.high, asset.precision)}</span></span>
-                <span>24h L: <span className="text-gray-300">${fmtPrice(stats24h.low, asset.precision)}</span></span>
-                <span>Vol: <span className="text-gray-300">${fmtNotionalShort(stats24h.volUsd)}</span></span>
-              </div>
-            </div>
-            <div className="text-right">
-              <div className={`text-5xl font-black ${confidence > 60 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                {confidence}
-              </div>
-              <div className="text-[9px] text-gray-500 font-bold tracking-widest mt-1">CONFIDENCE</div>
-            </div>
-          </div>
-
-          {/* MARKET BIAS BAR */}
-          <div className="panel p-4">
-            <div className="flex justify-between items-end mb-2">
-              <div className="text-xs font-bold text-gray-400 tracking-widest">MARKET BIAS</div>
-              <div className="text-[10px] text-gray-500 font-mono">{buyPct.toFixed(1)}/100</div>
-            </div>
-            <div className={`text-sm font-bold mb-3 ${buyPct > 50 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {buyPct > 50 ? 'BULLISH' : 'BEARISH'}
-            </div>
-            <div className="h-2 w-full bg-red-500/20 rounded-full overflow-hidden flex">
-              <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${buyPct}%` }}></div>
-              <div className="h-full bg-red-500 transition-all duration-300" style={{ width: `${sellPct}%` }}></div>
-            </div>
-            <div className="flex justify-between mt-2 text-[10px] font-bold">
-              <span className="text-emerald-400">{buyPct.toFixed(1)}% BUY</span>
-              <span className="text-red-400">{sellPct.toFixed(1)}% SELL</span>
-            </div>
-          </div>
-
-          {/* POSSIBLE SPOOFING MODULE */}
-          <div className="panel p-4 relative overflow-hidden">
-            <h3 className="text-[10px] font-bold text-gray-400 tracking-widest mb-3">POSSIBLE SPOOFING</h3>
-            
-            <div className="flex gap-4 items-center">
-              <div className={`text-5xl font-black tracking-tighter ${spoofScore > 80 ? 'text-red-500' : spoofScore > 50 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                {spoofScore}<span className="text-xl text-gray-600">/100</span>
-              </div>
-              <div className="flex-1 text-xs text-gray-300 leading-tight">
-                {spoofAlerts.length > 0 ? spoofAlerts[0].msg : 'No recent spoofing patterns detected in order book data.'}
-              </div>
-            </div>
-
-            {/* Warning Text */}
-            <div className="mt-3 text-[9px] text-gray-500 flex items-center gap-1">
-              <svg className="w-3 h-3 text-gray-600" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
-              Probability estimate only. Never confirmed — do not trade on this alone.
-            </div>
-
-            {/* Spoofing Bar Chart History */}
-            <div className="mt-4 h-10 flex items-end gap-[2px] w-full">
-              {spoofHistory.map((score, i) => {
-                let colorClass = 'bg-gray-800';
-                if (score > 80) colorClass = 'bg-red-500';
-                else if (score > 50) colorClass = 'bg-amber-400';
-                else if (score > 30) colorClass = 'bg-red-900/50';
-                
-                return (
-                  <div key={i} className={`flex-1 rounded-t-sm transition-all duration-300 ${colorClass}`} style={{ height: `${Math.max(10, score)}%` }}></div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* CVD - VOLUME DELTA */}
-          <div className="panel p-4">
-            <h3 className="text-[10px] font-bold text-gray-400 tracking-widest mb-4">CVD — VOLUME DELTA</h3>
-            
-            <div className="grid grid-cols-4 gap-2 text-center">
-              <div>
-                <div className="text-emerald-400 font-mono font-bold text-sm sm:text-base">{fmtVol(buyVol)}</div>
-                <div className="text-[10px] text-gray-500 font-bold mt-1">{asset.base}</div>
-                <div className="text-[9px] text-gray-600 mt-0.5">Buy Vol</div>
-              </div>
-              <div>
-                <div className="text-red-500 font-mono font-bold text-sm sm:text-base">{fmtVol(sellVol)}</div>
-                <div className="text-[10px] text-gray-500 font-bold mt-1">{asset.base}</div>
-                <div className="text-[9px] text-gray-600 mt-0.5">Sell Vol</div>
-              </div>
-              <div>
-                <div className="text-pink-500 font-mono font-bold text-sm sm:text-base">{delta > 0 ? '+' : ''}{fmtVol(delta)}</div>
-                <div className="text-[10px] text-gray-500 font-bold mt-1">Delta</div>
-              </div>
-              <div className="flex flex-col items-center justify-start pt-1">
-                <div className={`text-sm font-bold flex items-center gap-1 ${delta >= 0 ? 'text-emerald-400' : 'text-red-500'}`}>
-                  {delta >= 0 ? 'Bull' : 'Bear'}
-                  {delta >= 0 ? '↑' : '↓'}
-                </div>
-                <div className="text-[9px] text-gray-600 mt-2">Trend</div>
-              </div>
-            </div>
-          </div>
-
-          {/* LIQUIDITY TARGET ZONES */}
-          <div className="panel p-4">
-            <h3 className="text-[10px] font-bold text-gray-400 tracking-widest mb-3">LIQUIDITY TARGET ZONES</h3>
-            <div className="space-y-1.5">
-              {combinedBook.length === 0 && <div className="text-xs text-gray-500 text-center py-4">Gathering Order Book...</div>}
-              {combinedBook.map((zone, i) => {
-                const isSell = zone.type === 'sell';
-                const notional = zone.p * zone.q;
-                const score = Math.min(99, Math.round(50 + (notional / 50000) * 49)); // Dummy confidence calc
-                return (
-                  <div key={i} className="flex justify-between items-center text-xs font-mono bg-[#0B0E14] px-2 py-1.5 rounded">
-                    <div className="flex items-center gap-2 w-24">
-                      <span className={isSell ? 'text-amber-400' : 'text-blue-400'}>{isSell ? '▲' : '▼'}</span>
-                      <span className="text-gray-200">${fmtPrice(zone.p, asset.precision)}</span>
-                    </div>
-                    <div className={`flex-1 text-center py-0.5 rounded ${isSell ? 'text-amber-400 bg-amber-400/10' : 'text-blue-400 bg-blue-400/10'}`}>
-                      {isSell ? 'Sell Wall' : 'Buy Wall'} · ${fmtNotionalShort(notional)}
-                    </div>
-                    <div className={`w-8 text-right font-bold ${isSell ? 'text-amber-400' : 'text-blue-400'}`}>
-                      {score}
-                    </div>
+          {/* LIVE SIGNAL BANNER */}
+          {signal && (
+            <div className={`p-5 rounded-2xl border transition-all ${
+              signal.type.includes('BUY') ? 'bg-emerald-950/40 border-emerald-500/50' :
+              signal.type.includes('SELL') ? 'bg-rose-950/40 border-rose-500/50' : 'bg-slate-900 border-slate-700'
+            }`}>
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400 uppercase font-bold tracking-wider">{selectedAsset.name}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-semibold">{selectedAsset.cat}</span>
                   </div>
-                );
-              })}
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className={`text-2xl font-black ${
+                      signal.type.includes('BUY') ? 'text-emerald-400' :
+                      signal.type.includes('SELL') ? 'text-rose-400' : 'text-amber-400'
+                    }`}>
+                      {signal.type}
+                    </span>
+                    <span className="px-2 py-0.5 text-xs font-bold rounded bg-slate-800 text-cyan-400">
+                      {signal.confidence}% Confidence
+                    </span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs text-slate-400">Live Price</span>
+                  <div className="text-2xl font-mono font-bold text-white">
+                    ${fmtPrice(price, selectedAsset.precision)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Entry, SL & TP Targets */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 block">Entry Zone</span>
+                  <span className="text-sm font-mono font-bold text-slate-100">${signal.entry}</span>
+                </div>
+                <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 block">Stop Loss (SL)</span>
+                  <span className="text-sm font-mono font-bold text-rose-400">${signal.sl}</span>
+                </div>
+                <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 block">Target 1 (TP1)</span>
+                  <span className="text-sm font-mono font-bold text-emerald-400">${signal.tp1}</span>
+                </div>
+                <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 block">Target 2 (TP2)</span>
+                  <span className="text-sm font-mono font-bold text-cyan-400">${signal.tp2}</span>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-slate-400"><strong className="text-slate-300">Driver:</strong> {signal.reason}</p>
+            </div>
+          )}
+
+          {/* Tactical Signal Analysis box */}
+          {signal && (
+            <div className="p-5 rounded-2xl border border-cyan-900/50 bg-slate-900 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-black text-cyan-400 uppercase tracking-wide">Tactical Signal Analysis</h3>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-semibold">Heuristic estimate</span>
+              </div>
+
+              {/* Possible Spoofing */}
+              <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800">
+                <span className="text-[10px] tracking-widest text-slate-500 font-bold uppercase block mb-2">Possible Spoofing</span>
+                <div className="flex items-start gap-3 mb-3">
+                  <span className={`text-3xl font-black leading-none ${spoofScore >= 70 ? 'text-rose-400' : spoofScore >= 35 ? 'text-amber-400' : 'text-slate-400'}`}>
+                    {spoofScore}<span className="text-sm text-slate-500">/100</span>
+                  </span>
+                  <p className="text-xs text-slate-400 leading-snug pt-1">
+                    {spoofAlerts.length > 0
+                      ? `${fmtNotional(spoofAlerts[0].notional)} ${spoofAlerts[0].side === 'bid' ? 'bid' : 'ask'} wall at $${fmtPrice(spoofAlerts[0].price, selectedAsset.precision)} — pulled after ${spoofAlerts[0].elapsedSec.toFixed(1)}s, 0% filled`
+                      : 'No wall pulled recently — score reflects current order-book anomaly level.'}
+                  </p>
+                </div>
+                <div className="flex items-end gap-[3px] h-10">
+                  {(spoofHistory.length ? spoofHistory : [spoofScore]).map((s, i) => (
+                    <div
+                      key={i}
+                      className={`flex-1 rounded-sm ${s >= 70 ? 'bg-rose-500' : s >= 35 ? 'bg-rose-500/60' : 'bg-rose-500/25'}`}
+                      style={{ height: `${Math.max(6, s)}%` }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Liquidity Target Zones */}
+              <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800">
+                <span className="text-[10px] tracking-widest text-slate-500 font-bold uppercase block mb-2">Liquidity Target Zones</span>
+                <div className="space-y-1.5">
+                  {(signal.zones || []).map((z, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs">
+                      {/* FIX: Correct directional arrow logic for Buy vs Sell walls */}
+                      <span className={`w-3 text-center font-bold ${z.side === 'bid' ? 'text-blue-400' : 'text-amber-400'}`}>
+                        {z.side === 'bid' ? '▲' : '▼'}
+                      </span>
+                      <span className="font-mono font-bold text-slate-100 w-20 shrink-0">${fmtPrice(z.price, selectedAsset.precision)}</span>
+                      <span className={`flex-1 px-2 py-1 rounded-md font-semibold truncate ${
+                        z.side === 'bid' ? 'bg-blue-950/50 text-blue-300' : 'bg-amber-950/50 text-amber-300'
+                      }`}>
+                        {z.side === 'bid' ? 'Buy Wall' : 'Sell Wall'} · {fmtNotional(z.notional)}
+                      </span>
+                      <span className={`font-mono font-bold w-7 text-right ${z.side === 'bid' ? 'text-blue-400' : 'text-amber-400'}`}>{z.zoneScore}</span>
+                    </div>
+                  ))}
+                  {(!signal.zones || signal.zones.length === 0) && (
+                    <span className="text-xs text-slate-500">Gathering order book data...</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Intraday Trading Signals */}
+              <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800">
+                <span className="text-[10px] tracking-widest text-slate-500 font-bold uppercase block mb-3">Intraday Trading Signals (30m - 2h)</span>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 text-center">
+                    <span className="text-[10px] text-slate-400 block mb-1">30m Trend</span>
+                    <span className={`text-sm font-black ${buyRatio > 52 ? 'text-emerald-400' : buyRatio < 48 ? 'text-rose-400' : 'text-amber-400'}`}>
+                      {buyRatio > 52 ? 'BUY' : buyRatio < 48 ? 'SELL' : 'NEUTRAL'}
+                    </span>
+                  </div>
+                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 text-center">
+                    <span className="text-[10px] text-slate-400 block mb-1">1h Momentum</span>
+                    <span className={`text-sm font-black ${signal.type.includes('BUY') ? 'text-emerald-400' : signal.type.includes('SELL') ? 'text-rose-400' : 'text-amber-400'}`}>
+                      {signal.type.includes('BUY') ? 'BUY' : signal.type.includes('SELL') ? 'SELL' : 'WAIT'}
+                    </span>
+                  </div>
+                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 text-center">
+                    <span className="text-[10px] text-slate-400 block mb-1">2h Projection</span>
+                    <span className={`text-sm font-black ${
+                      signal.projection?.direction === 'up' ? 'text-emerald-400' :
+                      signal.projection?.direction === 'down' ? 'text-rose-400' : 'text-amber-400'
+                    }`}>
+                      {signal.projection?.direction === 'up' ? 'BUY' : signal.projection?.direction === 'down' ? 'SELL' : 'WAIT'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* Live Volume & Order Book */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-3">
+              <h3 className="text-xs font-bold text-slate-400 uppercase">Live Delta Volume <span className="text-slate-600 normal-case">(last {trades.length} trades)</span></h3>
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs font-mono font-bold">
+                  <span className="text-emerald-400">Buys {buyRatio}%</span>
+                  <span className="text-rose-400">Sells {sellRatio}%</span>
+                </div>
+                <div className="h-2.5 w-full bg-rose-500/30 rounded-full overflow-hidden flex">
+                  <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${buyRatio}%` }} />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-2">
+              <h3 className="text-xs font-bold text-slate-400 uppercase">Order Book Walls ({selectedAsset.name})</h3>
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                <div>
+                  <span className="text-[10px] text-emerald-500 font-bold block">BID WALLS (Support)</span>
+                  {bids.slice(0, mode === 'pro' ? 5 : 2).map((b, i) => (
+                    <div key={i} className="flex justify-between bg-emerald-950/20 p-1 rounded my-1 border border-emerald-900/30">
+                      <span>${fmtPrice(b.price, selectedAsset.precision)}</span>
+                      <span className="text-emerald-400">{b.qty > 1000 ? (b.qty / 1000).toFixed(1) + 'k' : b.qty.toFixed(2)}</span>
+                    </div>
+                  ))}
+                  {bids.length === 0 && <span className="text-slate-600 text-[10px]">Loading bids...</span>}
+                </div>
+                <div>
+                  <span className="text-[10px] text-rose-500 font-bold block">ASK WALLS (Resistance)</span>
+                  {asks.slice(0, mode === 'pro' ? 5 : 2).map((a, i) => (
+                    <div key={i} className="flex justify-between bg-rose-950/20 p-1 rounded my-1 border border-rose-900/30">
+                      <span>${fmtPrice(a.price, selectedAsset.precision)}</span>
+                      <span className="text-rose-400">{a.qty > 1000 ? (a.qty / 1000).toFixed(1) + 'k' : a.qty.toFixed(2)}</span>
+                    </div>
+                  ))}
+                  {asks.length === 0 && <span className="text-slate-600 text-[10px]">Loading asks...</span>}
+                </div>
+              </div>
             </div>
           </div>
-
         </div>
       );
     }
