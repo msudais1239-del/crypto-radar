@@ -31,12 +31,12 @@
       { id: 'linkusdt', name: 'LINK-PERP', cat: 'Perps', precision: 2, basePrice: 16.50, type: 'binance' },
       { id: 'avaxusdt', name: 'AVAX-PERP', cat: 'Perps', precision: 2, basePrice: 28.00, type: 'binance' },
 
-      // Commodities & Forex (simulated / Twelve Data)
+      // Commodities & Forex
       { id: 'xauusd', name: 'XAU/USD (Gold)', cat: 'Commodities', precision: 2, basePrice: 2420.50, type: 'sim' },
       { id: 'eurusd', name: 'EUR/USD', cat: 'Forex', precision: 5, basePrice: 1.0885, type: 'sim' },
       { id: 'gbpusd', name: 'GBP/USD', cat: 'Forex', precision: 5, basePrice: 1.2850, type: 'sim' },
 
-      // Stock Indices (simulated)
+      // Stock Indices
       { id: 'nasdaq', name: 'NASDAQ (US100)', cat: 'Indices', precision: 2, basePrice: 19850.00, type: 'sim' },
       { id: 'us30', name: 'DOW JONES (US30)', cat: 'Indices', precision: 2, basePrice: 40500.00, type: 'sim' },
     ];
@@ -53,6 +53,7 @@
       us30: 'DJI',    
     };
     const TWELVE_DATA_POLL_MS = 60000;
+    const CANDLE_INTERVAL_SEC = 300; // 5 Minutes (5m timeframe)
 
     function fmtPrice(p, precision) {
       if (p === undefined || p === null || isNaN(p)) return '—';
@@ -97,7 +98,7 @@
       const volumeSeriesRef = useRef(null);
       const currentCandleRef = useRef(null);
 
-      // Initialize Lightweight Chart
+      // Initialize Lightweight Chart for 5m Timeframe
       useEffect(() => {
         if (!chartContainerRef.current) return;
 
@@ -121,7 +122,7 @@
           timeScale: {
             borderColor: '#1e293b',
             timeVisible: true,
-            secondsVisible: true,
+            secondsVisible: false,
           },
         });
 
@@ -152,17 +153,17 @@
         candlestickSeriesRef.current = candlestickSeries;
         volumeSeriesRef.current = volumeSeries;
 
-        // Seed initial history
+        // Seed initial history with 5-minute intervals
         const now = Math.floor(Date.now() / 1000);
         const initialCandles = [];
         let baseP = selectedAsset.basePrice;
-        for (let i = 60; i >= 0; i--) {
-          const time = now - i * 5;
+        for (let i = 40; i >= 0; i--) {
+          const time = now - i * CANDLE_INTERVAL_SEC;
           const open = baseP;
-          const close = open + (Math.random() - 0.49) * (baseP * 0.001);
-          const high = Math.max(open, close) + Math.random() * (baseP * 0.0005);
-          const low = Math.min(open, close) - Math.random() * (baseP * 0.0005);
-          const volume = Math.random() * 10000 + 1000;
+          const close = open + (Math.random() - 0.49) * (baseP * 0.008);
+          const high = Math.max(open, close) + Math.random() * (baseP * 0.004);
+          const low = Math.min(open, close) - Math.random() * (baseP * 0.004);
+          const volume = Math.random() * 50000 + 5000;
           initialCandles.push({ time, open, high, low, close });
           volumeSeries.update({ time, value: volume, color: close >= open ? '#10b98166' : '#f43f5e66' });
           baseP = close;
@@ -183,16 +184,17 @@
         };
       }, [selectedAsset]);
 
-      // Update Chart with live tick data
+      // Update Chart with live tick data aggregated into 5m candles
       const updateChartWithPrice = (newPrice, volumeVal = 500) => {
         if (!candlestickSeriesRef.current || !volumeSeriesRef.current) return;
         const nowSec = Math.floor(Date.now() / 1000);
         const current = currentCandleRef.current;
+        const bucketTime = nowSec - (nowSec % CANDLE_INTERVAL_SEC);
 
-        if (!current || nowSec > current.time) {
-          // New candle window (5-second aggregation)
+        if (!current || bucketTime > current.time) {
+          // New 5m candle window
           const newCandle = {
-            time: nowSec - (nowSec % 5),
+            time: bucketTime,
             open: current ? current.close : newPrice,
             high: newPrice,
             low: newPrice,
@@ -206,7 +208,7 @@
             color: newPrice >= newCandle.open ? '#10b98166' : '#f43f5e66',
           });
         } else {
-          // Update existing candle
+          // Update existing 5m candle
           const updated = {
             ...current,
             high: Math.max(current.high, newPrice),
@@ -220,7 +222,8 @@
 
       // Connect to Real-time Stream
       useEffect(() => {
-        let cancelled = false;
+        let cancelled = first => first;
+        let isCancelled = false;
         
         let liveTrades = [];
         let latestBids = [];
@@ -248,16 +251,16 @@
 
           fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${symbol.toUpperCase()}`)
             .then(r => r.json())
-            .then(d => { if (!cancelled && d && d.price) lastPrice = parseFloat(d.price); })
+            .then(d => { if (!isCancelled && d && d.price) lastPrice = parseFloat(d.price); })
             .catch(() => {
               fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol.toUpperCase()}`)
                 .then(r => r.json())
-                .then(d => { if (!cancelled && d && d.price) lastPrice = parseFloat(d.price); })
+                .then(d => { if (!isCancelled && d && d.price) lastPrice = parseFloat(d.price); })
                 .catch(() => {});
             });
 
           function connectCombinedWS() {
-            if (cancelled) return;
+            if (isCancelled) return;
 
             const domain = useFutures ? 'fstream.binance.com' : 'stream.binance.com:9443';
             const url = `wss://${domain}/stream?streams=${symbol}@aggTrade/${symbol}@depth20@100ms`;
@@ -266,7 +269,7 @@
 
             ws.onopen = () => {
               retryCount = 0;
-              if (!cancelled) setConnStatus('live');
+              if (!isCancelled) setConnStatus('live');
             };
 
             ws.onmessage = (e) => {
@@ -311,11 +314,11 @@
 
             ws.onerror = () => {
               if (useFutures) useFutures = false; 
-              if (!cancelled) setConnStatus('reconnecting');
+              if (!isCancelled) setConnStatus('reconnecting');
             };
 
             ws.onclose = () => {
-              if (cancelled) return;
+              if (isCancelled) return;
               setConnStatus('reconnecting');
               const delay = Math.min(1000 * 2 ** retryCount, 10000);
               retryCount += 1;
@@ -326,14 +329,14 @@
           connectCombinedWS();
 
           syncInterval = setInterval(() => {
-            if (cancelled) return;
+            if (isCancelled) return;
             setTrades([...liveTrades]);
             if (latestBids.length > 0) setBids([...latestBids]);
             if (latestAsks.length > 0) setAsks([...latestAsks]);
           }, 250);
 
           return () => {
-            cancelled = true;
+            isCancelled = true;
             clearTimeout(retryTimer);
             clearInterval(syncInterval);
             if (ws) ws.close();
@@ -348,7 +351,7 @@
             try {
               const res = await fetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(tdSymbol)}&apikey=${encodeURIComponent(apiKey)}`);
               const d = await res.json();
-              if (cancelled) return;
+              if (isCancelled) return;
               if (d && d.price && !isNaN(parseFloat(d.price))) {
                 anchorPrice = parseFloat(d.price);
                 setPrice(anchorPrice);
@@ -358,7 +361,7 @@
                 setConnStatus(d.code === 429 ? 'rate_limited' : 'key_error');
               }
             } catch {
-              if (!cancelled) setConnStatus('key_error');
+              if (!isCancelled) setConnStatus('key_error');
             }
           }
 
@@ -410,7 +413,7 @@
           }, 100);
 
           return () => {
-            cancelled = true;
+            isCancelled = true;
             clearInterval(visualInterval);
             if (typeof pollInterval !== 'undefined') clearInterval(pollInterval);
           };
@@ -658,12 +661,12 @@
             {selectedAsset.type === 'sim' && connStatus === 'simulated' && `● SIMULATED — no API key entered, so ${selectedAsset.name} price/order book is a randomized walk.`}
           </div>
 
-          {/* Interactive Lightweight Chart Container */}
+          {/* Interactive Lightweight Chart Container (5m Timeframe) */}
           <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-black uppercase text-slate-300">{selectedAsset.name} Chart</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400 font-semibold">Real-Time Candlestick</span>
+                <span className="text-xs font-black uppercase text-slate-300">{selectedAsset.name} CHART</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400 font-semibold">5M Candlestick</span>
               </div>
               <div className="text-xs font-mono font-bold text-white">
                 ${fmtPrice(price, selectedAsset.precision)}
@@ -775,33 +778,6 @@
                   {(!signal.zones || signal.zones.length === 0) && (
                     <span className="text-xs text-slate-500">Gathering order book data...</span>
                   )}
-                </div>
-              </div>
-
-              <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800">
-                <span className="text-[10px] tracking-widest text-slate-500 font-bold uppercase block mb-3">Intraday Trading Signals (30m - 2h)</span>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 text-center">
-                    <span className="text-[10px] text-slate-400 block mb-1">30m Trend</span>
-                    <span className={`text-sm font-black ${buyRatio > 52 ? 'text-emerald-400' : buyRatio < 48 ? 'text-rose-400' : 'text-amber-400'}`}>
-                      {buyRatio > 52 ? 'BUY' : buyRatio < 48 ? 'SELL' : 'NEUTRAL'}
-                    </span>
-                  </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 text-center">
-                    <span className="text-[10px] text-slate-400 block mb-1">1h Momentum</span>
-                    <span className={`text-sm font-black ${signal.type.includes('BUY') ? 'text-emerald-400' : signal.type.includes('SELL') ? 'text-rose-400' : 'text-amber-400'}`}>
-                      {signal.type.includes('BUY') ? 'BUY' : signal.type.includes('SELL') ? 'SELL' : 'WAIT'}
-                    </span>
-                  </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 text-center">
-                    <span className="text-[10px] text-slate-400 block mb-1">2h Projection</span>
-                    <span className={`text-sm font-black ${
-                      signal.projection?.direction === 'up' ? 'text-emerald-400' :
-                      signal.projection?.direction === 'down' ? 'text-rose-400' : 'text-amber-400'
-                    }`}>
-                      {signal.projection?.direction === 'up' ? 'BUY' : signal.projection?.direction === 'down' ? 'SELL' : 'WAIT'}
-                    </span>
-                  </div>
                 </div>
               </div>
             </div>
