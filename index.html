@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Liquidity Radar Pro - Binance Live</title>
+  <!-- Tailwind CSS & React CDN Libraries -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const PAIRS = [
+      { id: 'btcusdt', name: 'BTC/USDT Perp', precision: 2 },
+      { id: 'ethusdt', name: 'ETH/USDT Perp', precision: 2 },
+      { id: 'solusdt', name: 'SOL/USDT Perp', precision: 2 },
+    ];
+
+    function TerminalApp() {
+      const [selectedPair, setSelectedPair] = useState(PAIRS[0]);
+      const [mode, setMode] = useState('simple');
+      const [price, setPrice] = useState(0);
+      const [buyVolume, setBuyVolume] = useState(0);
+      const [sellVolume, setSellVolume] = useState(0);
+      const [bids, setBids] = useState([]);
+      const [asks, setAsks] = useState([]);
+      const [signal, setSignal] = useState(null);
+
+      const wsTradeRef = useRef(null);
+      const wsDepthRef = useRef(null);
+
+      useEffect(() => {
+        setBuyVolume(0);
+        setSellVolume(0);
+        const symbol = selectedPair.id;
+
+        // Trade flow WebSocket (Binance Futures)
+        wsTradeRef.current = new WebSocket(`wss://fstream.binance.com/ws/${symbol}@aggTrade`);
+        wsTradeRef.current.onmessage = (e) => {
+          const d = JSON.parse(e.data);
+          const p = parseFloat(d.p);
+          const q = parseFloat(d.q);
+          const isSell = d.m;
+          setPrice(p);
+          if (isSell) setSellVolume(prev => prev + q * p);
+          else setBuyVolume(prev => prev + q * p);
+        };
+
+        // Depth WebSocket (Binance Futures)
+        wsDepthRef.current = new WebSocket(`wss://fstream.binance.com/ws/${symbol}@depth20@100ms`);
+        wsDepthRef.current.onmessage = (e) => {
+          const d = JSON.parse(e.data);
+          if (d.b && d.a) {
+            setBids(d.b.slice(0, 8).map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) })));
+            setAsks(d.a.slice(0, 8).map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) })));
+          }
+        };
+
+        return () => {
+          if (wsTradeRef.current) wsTradeRef.current.close();
+          if (wsDepthRef.current) wsDepthRef.current.close();
+        };
+      }, [selectedPair]);
+
+      // Signal Engine
+      useEffect(() => {
+        if (!price || bids.length === 0 || asks.length === 0) return;
+        const totalVol = buyVolume + sellVolume || 1;
+        const buyRatio = (buyVolume / totalVol) * 100;
+        
+        const totalBidQty = bids.reduce((acc, b) => acc + b.qty, 0);
+        const totalAskQty = asks.reduce((acc, a) => acc + a.qty, 0);
+        const depthImbalance = totalBidQty / (totalBidQty + totalAskQty || 1);
+
+        const score = Math.round((buyRatio - 50) * 1.2 + (depthImbalance - 0.5) * 80);
+
+        let type = 'NEUTRAL';
+        if (score >= 25) type = 'BUY';
+        if (score >= 60) type = 'STRONG BUY';
+        if (score <= -25) type = 'SELL';
+        if (score <= -60) type = 'STRONG SELL';
+
+        const lowestBid = bids[bids.length - 1]?.price || price * 0.99;
+        const highestAsk = asks[asks.length - 1]?.price || price * 1.01;
+
+        const sl = type.includes('BUY') 
+          ? (lowestBid * 0.998).toFixed(selectedPair.precision)
+          : (highestAsk * 1.002).toFixed(selectedPair.precision);
+
+        const tp1 = type.includes('BUY')
+          ? (price + (price - parseFloat(sl)) * 1.5).toFixed(selectedPair.precision)
+          : (price - (parseFloat(sl) - price) * 1.5).toFixed(selectedPair.precision);
+
+        const tp2 = type.includes('BUY')
+          ? (price + (price - parseFloat(sl)) * 3.0).toFixed(selectedPair.precision)
+          : (price - (parseFloat(sl) - price) * 3.0).toFixed(selectedPair.precision);
+
+        const reason = type.includes('BUY')
+          ? `Whale Buy Wall ($${bids[0]?.price}) active. Buyer flow at ${buyRatio.toFixed(1)}%.`
+          : `Ask Wall Resistance ($${asks[0]?.price}) active. Seller flow at ${(100 - buyRatio).toFixed(1)}%.`;
+
+        setSignal({ type, confidence: Math.min(Math.abs(score) + 35, 98), entry: price.toFixed(selectedPair.precision), sl, tp1, tp2, reason });
+      }, [price, buyVolume, sellVolume, bids, asks]);
+
+      const totalVol = buyVolume + sellVolume || 1;
+      const buyRatio = Math.round((buyVolume / totalVol) * 100);
+      const sellRatio = 100 - buyRatio;
+
+      return (
+        <div className="min-h-screen p-4 max-w-5xl mx-auto space-y-4">
+          {/* Header */}
+          <header className="flex flex-wrap items-center justify-between gap-3 p-4 bg-slate-900 rounded-2xl border border-slate-800">
+            <div className="flex items-center space-x-2">
+              <div className="h-3 w-3 rounded-full bg-emerald-500 animate-ping" />
+              <h1 className="text-lg font-black tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
+                LIQUIDITY RADAR
+              </h1>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
+                {PAIRS.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setSelectedPair(p)}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+                      selectedPair.id === p.id ? 'bg-emerald-500 text-slate-950' : 'text-slate-400'
+                    }`}
+                  >
+                    {p.name.split('/')[0]}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setMode(mode === 'simple' ? 'pro' : 'simple')}
+                className="px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-800 border border-slate-700 text-cyan-400"
+              >
+                {mode.toUpperCase()}
+              </button>
+            </div>
+          </header>
+
+          {/* Signal Header */}
+          {signal && (
+            <div className={`p-5 rounded-2xl border transition-all ${
+              signal.type.includes('BUY') ? 'bg-emerald-950/30 border-emerald-500/40' :
+              signal.type.includes('SELL') ? 'bg-rose-950/30 border-rose-500/40' : 'bg-slate-900 border-slate-800'
+            }`}>
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <span className="text-xs text-slate-400 uppercase font-bold tracking-wider">Automated Confluence</span>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className={`text-2xl font-black ${signal.type.includes('BUY') ? 'text-emerald-400' : signal.type.includes('SELL') ? 'text-rose-400' : 'text-slate-300'}`}>
+                      {signal.type}
+                    </span>
+                    <span className="px-2 py-0.5 text-xs font-bold rounded bg-slate-800 text-cyan-400">
+                      {signal.confidence}% Confidence
+                    </span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs text-slate-400">Live Price</span>
+                  <div className="text-2xl font-mono font-bold text-white">${price.toLocaleString()}</div>
+                </div>
+              </div>
+
+              {/* Targets */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 block">Entry Zone</span>
+                  <span className="text-sm font-mono font-bold text-slate-100">${signal.entry}</span>
+                </div>
+                <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 block">Stop Loss (SL)</span>
+                  <span className="text-sm font-mono font-bold text-rose-400">${signal.sl}</span>
+                </div>
+                <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 block">Target 1 (TP1)</span>
+                  <span className="text-sm font-mono font-bold text-emerald-400">${signal.tp1}</span>
+                </div>
+                <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 block">Target 2 (TP2)</span>
+                  <span className="text-sm font-mono font-bold text-cyan-400">${signal.tp2}</span>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-slate-400"><strong className="text-slate-300">Driver:</strong> {signal.reason}</p>
+            </div>
+          )}
+
+          {/* Flow & Book */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-3">
+              <h3 className="text-xs font-bold text-slate-400 uppercase">Live Delta Volume</h3>
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs font-mono font-bold">
+                  <span className="text-emerald-400">Buys {buyRatio}%</span>
+                  <span className="text-rose-400">Sells {sellRatio}%</span>
+                </div>
+                <div className="h-2.5 w-full bg-rose-500/30 rounded-full overflow-hidden flex">
+                  <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${buyRatio}%` }} />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-2">
+              <h3 className="text-xs font-bold text-slate-400 uppercase">Order Book Walls</h3>
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                <div>
+                  <span className="text-[10px] text-emerald-500 font-bold block">BID WALLS</span>
+                  {bids.slice(0, mode === 'pro' ? 5 : 2).map((b, i) => (
+                    <div key={i} className="flex justify-between bg-emerald-950/20 p-1 rounded my-1 border border-emerald-900/30">
+                      <span>${b.price}</span>
+                      <span className="text-emerald-400">{b.qty.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <span className="text-[10px] text-rose-500 font-bold block">ASK WALLS</span>
+                  {asks.slice(0, mode === 'pro' ? 5 : 2).map((a, i) => (
+                    <div key={i} className="flex justify-between bg-rose-950/20 p-1 rounded my-1 border border-rose-900/30">
+                      <span>${a.price}</span>
+                      <span className="text-rose-400">{a.qty.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<TerminalApp />);
+  </script>
+</body>
+</html>
