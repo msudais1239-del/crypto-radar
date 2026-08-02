@@ -16,19 +16,19 @@
     const { useState, useEffect, useRef } = React;
 
     const ASSETS = [
-      // Major Cryptos
-      { id: 'btcusdt', name: 'BTC/USDT', cat: 'Crypto', precision: 2, basePrice: 65000, type: 'binance' },
-      { id: 'ethusdt', name: 'ETH/USDT', cat: 'Crypto', precision: 2, basePrice: 3400, type: 'binance' },
-      { id: 'solusdt', name: 'SOL/USDT', cat: 'Crypto', precision: 2, basePrice: 180, type: 'binance' },
+      // Major Perps
+      { id: 'btcusdt', name: 'BTC-PERP', cat: 'Perps', precision: 2, basePrice: 65000, type: 'binance' },
+      { id: 'ethusdt', name: 'ETH-PERP', cat: 'Perps', precision: 2, basePrice: 3400, type: 'binance' },
+      { id: 'solusdt', name: 'SOL-PERP', cat: 'Perps', precision: 2, basePrice: 180, type: 'binance' },
 
-      // Small / Alt Cryptos
-      { id: 'xrpusdt', name: 'XRP/USDT', cat: 'Crypto', precision: 4, basePrice: 0.60, type: 'binance' },
-      { id: 'dogeusdt', name: 'DOGE/USDT', cat: 'Crypto', precision: 5, basePrice: 0.12, type: 'binance' },
-      { id: 'adausdt', name: 'ADA/USDT', cat: 'Crypto', precision: 4, basePrice: 0.40, type: 'binance' },
-      { id: 'pepeusdt', name: 'PEPE/USDT', cat: 'Crypto', precision: 8, basePrice: 0.00001, type: 'binance' },
-      { id: 'shibusdt', name: 'SHIB/USDT', cat: 'Crypto', precision: 8, basePrice: 0.000018, type: 'binance' },
-      { id: 'linkusdt', name: 'LINK/USDT', cat: 'Crypto', precision: 2, basePrice: 16.50, type: 'binance' },
-      { id: 'avaxusdt', name: 'AVAX/USDT', cat: 'Crypto', precision: 2, basePrice: 28.00, type: 'binance' },
+      // Alt Perps
+      { id: 'xrpusdt', name: 'XRP-PERP', cat: 'Perps', precision: 4, basePrice: 0.60, type: 'binance' },
+      { id: 'dogeusdt', name: 'DOGE-PERP', cat: 'Perps', precision: 5, basePrice: 0.12, type: 'binance' },
+      { id: 'adausdt', name: 'ADA-PERP', cat: 'Perps', precision: 4, basePrice: 0.40, type: 'binance' },
+      { id: 'pepeusdt', name: 'PEPE-PERP', cat: 'Perps', precision: 8, basePrice: 0.00001, type: 'binance' },
+      { id: 'shibusdt', name: 'SHIB-PERP', cat: 'Perps', precision: 8, basePrice: 0.000018, type: 'binance' },
+      { id: 'linkusdt', name: 'LINK-PERP', cat: 'Perps', precision: 2, basePrice: 16.50, type: 'binance' },
+      { id: 'avaxusdt', name: 'AVAX-PERP', cat: 'Perps', precision: 2, basePrice: 28.00, type: 'binance' },
 
       // Commodities & Forex (simulated / Twelve Data)
       { id: 'xauusd', name: 'XAU/USD (Gold)', cat: 'Commodities', precision: 2, basePrice: 2420.50, type: 'sim' },
@@ -40,7 +40,7 @@
       { id: 'us30', name: 'DOW JONES (US30)', cat: 'Indices', precision: 2, basePrice: 40500.00, type: 'sim' },
     ];
 
-    const CATEGORIES = ['All', 'Crypto', 'Forex', 'Commodities', 'Indices'];
+    const CATEGORIES = ['All', 'Perps', 'Forex', 'Commodities', 'Indices'];
     const TRADE_WINDOW = 300; 
     const PRICE_HISTORY_MS = 10 * 60 * 1000; 
 
@@ -165,8 +165,10 @@
                   const q = parseFloat(d.q);
                   if (!isNaN(p) && !isNaN(q)) {
                     lastPrice = p;
-                    const now = Date.now();
+                    // Update price immediately for a chart-like tick feel
+                    setPrice(lastPrice);
 
+                    const now = Date.now();
                     priceHistoryRef.current.push({ t: now, p: lastPrice });
                     priceHistoryRef.current = priceHistoryRef.current.filter(pt => now - pt.t <= PRICE_HISTORY_MS);
 
@@ -182,7 +184,7 @@
             };
 
             ws.onerror = () => {
-              if (useFutures) useFutures = false; // Fallback to Spot stream if Futures socket fails
+              if (useFutures) useFutures = false; 
               if (!cancelled) setConnStatus('reconnecting');
             };
 
@@ -197,10 +199,9 @@
 
           connectCombinedWS();
 
-          // Smooth React state sync interval every 250ms
+          // Sync heavy DOM elements (order book and trades) on an interval to maintain performance
           syncInterval = setInterval(() => {
             if (cancelled) return;
-            setPrice(lastPrice);
             setTrades([...liveTrades]);
             if (latestBids.length > 0) setBids([...latestBids]);
             if (latestAsks.length > 0) setAsks([...latestAsks]);
@@ -244,6 +245,7 @@
             setConnStatus('simulated');
           }
 
+          // Increased interval speed from 300ms to 100ms for fluid chart movement
           const visualInterval = setInterval(() => {
             const jitter = apiKey ? anchorPrice * (Math.random() - 0.5) * 0.00005 : anchorPrice * (Math.random() - 0.49) * 0.0006;
             if (!apiKey) anchorPrice = anchorPrice * (1 + (Math.random() - 0.49) * 0.0006);
@@ -280,7 +282,7 @@
 
             setBids(generatedBids);
             setAsks(generatedAsks);
-          }, 300);
+          }, 100);
 
           return () => {
             cancelled = true;
@@ -376,7 +378,6 @@
           ? `Sell-side resistance near $${topAsk}. Recent flow ${(100 - buyRatio).toFixed(0)}% sellers.`
           : `Market balanced around $${fmtPrice(price, selectedAsset.precision)}. Awaiting breakout.`;
 
-        // Generate Liquidity Zones without fake hardcoded $10M floor
         const zoneCandidates = [
           ...currentBids.map(b => ({ side: 'bid', price: b.price, qty: b.qty, notional: b.qty * b.price })),
           ...currentAsks.map(a => ({ side: 'ask', price: a.price, qty: a.qty, notional: a.qty * a.price })),
@@ -428,7 +429,6 @@
         ? ASSETS
         : ASSETS.filter(a => a.cat === activeTab);
 
-      // Dynamic volume ratio for immediate UI view
       const buyVolume = trades.filter(t => t.side === 'buy').reduce((a, t) => a + t.notional, 0);
       const sellVolume = trades.filter(t => t.side === 'sell').reduce((a, t) => a + t.notional, 0);
       const totalVol = buyVolume + sellVolume || 1;
@@ -437,7 +437,6 @@
 
       return (
         <div className="min-h-screen p-3 md:p-6 max-w-5xl mx-auto space-y-4">
-          {/* Header & Asset Navigation */}
           <header className="p-4 bg-slate-900 rounded-2xl border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
@@ -485,7 +484,6 @@
               </div>
             )}
 
-            {/* Category Filter Tabs */}
             <div className="flex flex-wrap gap-1.5 pt-1">
               {CATEGORIES.map(cat => (
                 <button
@@ -502,7 +500,6 @@
               ))}
             </div>
 
-            {/* Horizontal Scroll Asset Bar */}
             <div className="flex gap-2 overflow-x-auto pb-1">
               {filteredAssets.map(asset => (
                 <button
@@ -536,7 +533,6 @@
             {selectedAsset.type === 'sim' && connStatus === 'simulated' && `● SIMULATED — no API key entered, so ${selectedAsset.name} price/order book is a randomized walk.`}
           </div>
 
-          {/* LIVE SIGNAL BANNER */}
           {signal && (
             <div className={`p-5 rounded-2xl border transition-all ${
               signal.type.includes('BUY') ? 'bg-emerald-950/40 border-emerald-500/50' :
@@ -568,7 +564,6 @@
                 </div>
               </div>
 
-              {/* Entry, SL & TP Targets */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
                   <span className="text-[11px] text-slate-400 block">Entry Zone</span>
@@ -591,7 +586,6 @@
             </div>
           )}
 
-          {/* Tactical Signal Analysis box */}
           {signal && (
             <div className="p-5 rounded-2xl border border-cyan-900/50 bg-slate-900 space-y-4">
               <div className="flex items-center justify-between">
@@ -599,7 +593,6 @@
                 <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-semibold">Heuristic estimate</span>
               </div>
 
-              {/* Possible Spoofing */}
               <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800">
                 <span className="text-[10px] tracking-widest text-slate-500 font-bold uppercase block mb-2">Possible Spoofing</span>
                 <div className="flex items-start gap-3 mb-3">
@@ -623,13 +616,11 @@
                 </div>
               </div>
 
-              {/* Liquidity Target Zones */}
               <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800">
                 <span className="text-[10px] tracking-widest text-slate-500 font-bold uppercase block mb-2">Liquidity Target Zones</span>
                 <div className="space-y-1.5">
                   {(signal.zones || []).map((z, i) => (
                     <div key={i} className="flex items-center gap-2 text-xs">
-                      {/* FIX: Correct directional arrow logic for Buy vs Sell walls */}
                       <span className={`w-3 text-center font-bold ${z.side === 'bid' ? 'text-blue-400' : 'text-amber-400'}`}>
                         {z.side === 'bid' ? '▲' : '▼'}
                       </span>
@@ -648,7 +639,6 @@
                 </div>
               </div>
 
-              {/* Intraday Trading Signals */}
               <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800">
                 <span className="text-[10px] tracking-widest text-slate-500 font-bold uppercase block mb-3">Intraday Trading Signals (30m - 2h)</span>
                 <div className="grid grid-cols-3 gap-3">
@@ -675,11 +665,9 @@
                   </div>
                 </div>
               </div>
-
             </div>
           )}
 
-          {/* Live Volume & Order Book */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-3">
               <h3 className="text-xs font-bold text-slate-400 uppercase">Live Delta Volume <span className="text-slate-600 normal-case">(last {trades.length} trades)</span></h3>
